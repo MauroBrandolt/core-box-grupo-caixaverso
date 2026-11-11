@@ -1,0 +1,457 @@
+name: Esteira DevSecOps - Core Box
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# MODO AUDITORIA.
+# No Lab 2, mudar para "false" para ativar os gates.
+env:
+  MODO_AUDITORIA: "true"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  gitleaks:
+    name: "1. Gitleaks"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Preparar Gitleaks
+        run: |
+          docker pull ghcr.io/gitleaks/gitleaks:v8.24.2
+          mkdir -p "$RUNNER_TEMP/gitleaks"
+
+      # MODO AUDITORIA
+      - name: Analisar segredos no historico
+        continue-on-error: ${{ env.MODO_AUDITORIA == 'true' }}
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e GIT_CONFIG_COUNT=1 \
+            -e GIT_CONFIG_KEY_0=safe.directory \
+            -e GIT_CONFIG_VALUE_0=/codigo \
+            -v "$GITHUB_WORKSPACE:/codigo:ro" \
+            -v "$RUNNER_TEMP/gitleaks:/relatorios" \
+            -w /codigo \
+            ghcr.io/gitleaks/gitleaks:v8.24.2 \
+            git /codigo \
+            --log-opts="--all" \
+            --redact \
+            --report-format=json \
+            --report-path=/relatorios/gitleaks.json \
+            --exit-code=1
+
+      - name: Publicar relatorio
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relatorio-gitleaks
+          path: ${{ runner.temp }}/gitleaks/gitleaks.json
+          if-no-files-found: error
+
+  semgrep:
+    name: "2. Semgrep"
+    needs: gitleaks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar Semgrep
+        run: |
+          python -m venv "$RUNNER_TEMP/semgrep-venv"
+          "$RUNNER_TEMP/semgrep-venv/bin/python" \
+            -m pip install "semgrep==1.184.0"
+
+      # MODO AUDITORIA
+      - name: Analisar codigo
+        continue-on-error: ${{ env.MODO_AUDITORIA == 'true' }}
+        run: |
+          CONFIGS=(--config p/python --config p/security-audit)
+
+          if [ -d .semgrep ] && \
+             find .semgrep -type f \
+               \( -name '*.yml' -o -name '*.yaml' \) | grep -q .; then
+            CONFIGS+=(--config .semgrep)
+          fi
+
+          "$RUNNER_TEMP/semgrep-venv/bin/semgrep" scan \
+            "${CONFIGS[@]}" \
+            --error \
+            --metrics=off \
+            --exclude .venv \
+            --json \
+            --output semgrep.json \
+            .
+
+      - name: Publicar relatorio
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relatorio-semgrep
+          path: semgrep.json
+          if-no-files-found: error
+
+  build_testes:
+    name: "3. Build e testes"
+    needs: semgrep
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias originais
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install -r requirements-dev.txt
+
+      # MODO AUDITORIA
+      - name: Executar testes
+        continue-on-error: ${{ env.MODO_AUDITORIA == 'true' }}
+        run: |
+          .venv/bin/python -m pytest -v --junitxml=junit.xml
+
+      - name: Empacotar codigo e verificar SHA-256
+        run: |
+          mkdir -p "$RUNNER_TEMP/core-box-build"
+
+          git archive \
+            --format=tar.gz \
+            --output="$RUNNER_TEMP/core-box-build/core-box.tar.gz" \
+            HEAD
+
+          cd "$RUNNER_TEMP/core-box-build"
+          sha256sum core-box.tar.gz > core-box.tar.gz.sha256
+          sha256sum --check core-box.tar.gz.sha256
+
+      - name: Publicar pacote e testes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relatorio-03-build
+          path: |
+            junit.xml
+            ${{ runner.temp }}/core-box-build/core-box.tar.gz
+            ${{ runner.temp }}/core-box-build/core-box.tar.gz.sha256
+          if-no-files-found: error
+
+  trivy_fs:
+    name: "4. Trivy filesystem e SBOM"
+    needs: build_testes
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Gerar relatorio completo
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          skip-dirs: .venv,.git
+          format: json
+          output: trivy-fs.json
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: "0"
+
+      - name: Gerar SBOM CycloneDX
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          skip-dirs: .venv,.git
+          format: cyclonedx
+          output: sbom.cdx.json
+          exit-code: "0"
+
+      # MODO AUDITORIA
+      - name: Gate HIGH e CRITICAL com correcao disponivel
+        continue-on-error: ${{ env.MODO_AUDITORIA == 'true' }}
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          skip-dirs: .venv,.git
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Publicar relatorios
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relatorio-04-trivy-sca
+          path: |
+            trivy-fs.json
+            sbom.cdx.json
+          if-no-files-found: error
+
+  docker:
+    name: "5. Docker e GHCR"
+    needs: trivy_fs
+
+    # Publicacao apenas para branches do proprio repositorio.
+    # PRs de forks nao recebem permissao de publicacao.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      imagem: ${{ steps.imagem.outputs.nome }}
+      digest: ${{ steps.build.outputs.digest }}
+      referencia: ${{ steps.referencia.outputs.valor }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Definir nome e tag
+        id: imagem
+        run: |
+          REPOSITORIO="${GITHUB_REPOSITORY,,}"
+          echo "nome=ghcr.io/${REPOSITORIO}" >> "$GITHUB_OUTPUT"
+          echo "tag=sha-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+      - name: Preparar contexto limpo do commit
+        run: |
+          mkdir -p "$RUNNER_TEMP/docker-context"
+          git archive HEAD | tar -x -C "$RUNNER_TEMP/docker-context"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login no GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Construir e publicar
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ runner.temp }}/docker-context
+          push: true
+          tags: ${{ steps.imagem.outputs.nome }}:${{ steps.imagem.outputs.tag }}
+
+      - name: Registrar imagem e digest
+        id: referencia
+        env:
+          IMAGEM: ${{ steps.imagem.outputs.nome }}
+          TAG: ${{ steps.imagem.outputs.tag }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          test -n "$DIGEST"
+          printf '%s:%s\n' "$IMAGEM" "$TAG" > imagem-tag.txt
+          printf '%s@%s\n' "$IMAGEM" "$DIGEST" > imagem-digest.txt
+          echo "valor=${IMAGEM}@${DIGEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Publicar identificacao da imagem
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-build
+          path: |
+            imagem-tag.txt
+            imagem-digest.txt
+          if-no-files-found: error
+
+  trivy_imagem:
+    name: "6. Trivy imagem"
+    needs: docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Gerar relatorio completo da imagem
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ needs.docker.outputs.referencia }}
+          scanners: vuln
+          format: json
+          output: trivy-image.json
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: "0"
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+
+      # MODO AUDITORIA
+      - name: Gate HIGH e CRITICAL com correcao disponivel
+        continue-on-error: ${{ env.MODO_AUDITORIA == 'true' }}
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ needs.docker.outputs.referencia }}
+          scanners: vuln
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publicar relatorio
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-image
+          path: trivy-image.json
+          if-no-files-found: error
+
+  homologacao:
+    name: "7. Homologacao e ZAP"
+    needs: [docker, trivy_imagem]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login no GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Subir imagem e aguardar saude
+        env:
+          IMAGEM: ${{ needs.docker.outputs.referencia }}
+        run: |
+          docker pull "$IMAGEM"
+
+          docker run -d \
+            --name core-box-homolog \
+            -p 127.0.0.1:8000:8000 \
+            "$IMAGEM"
+
+          for i in {1..30}; do
+            if curl --fail --silent --max-time 5 \
+              http://127.0.0.1:8000/health > /dev/null; then
+              echo "Core Box saudavel"
+              exit 0
+            fi
+            sleep 2
+          done
+
+          docker logs core-box-homolog
+          exit 1
+
+      - name: ZAP baseline informativo
+        uses: zaproxy/action-baseline@v0.15.0
+        with:
+          target: "http://127.0.0.1:8000"
+          fail_action: false
+          allow_issue_writing: false
+          artifact_name: homologacao-zap
+
+      - name: Coletar logs
+        if: always()
+        run: |
+          docker logs core-box-homolog > homologacao.log 2>&1 || true
+
+      - name: Publicar logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: homologacao-logs
+          path: homologacao.log
+          if-no-files-found: error
+
+      - name: Encerrar homologacao
+        if: always()
+        run: docker rm -f core-box-homolog || true
+
+  resumo:
+    name: Resumo da execucao
+    if: always()
+    needs:
+      - gitleaks
+      - semgrep
+      - build_testes
+      - trivy_fs
+      - docker
+      - trivy_imagem
+      - homologacao
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Publicar resumo
+        env:
+          RESULTADOS: ${{ toJSON(needs) }}
+          IMAGEM: ${{ needs.docker.outputs.referencia }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+
+          resultados = json.loads(os.environ["RESULTADOS"])
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as resumo:
+              resumo.write("# Core Box - resumo\n\n")
+              resumo.write(
+                  f"Modo auditoria: **{os.environ['MODO_AUDITORIA']}**\n\n"
+              )
+              resumo.write("| Job | Resultado |\n|---|---|\n")
+              for nome, dados in resultados.items():
+                  resumo.write(f"| {nome} | {dados['result']} |\n")
+              resumo.write(
+                  "\nEm auditoria, sucesso do job nao significa "
+                  "ausencia de vulnerabilidades. Consulte os relatorios "
+                  "e os passos com falhas toleradas.\n"
+              )
+              imagem = os.environ.get("IMAGEM", "")
+              if imagem:
+                  resumo.write(f"\nImagem analisada: `{imagem}`\n")
+              resumo.write(
+                  "\n**Etapa 8 pendente:** destino e acesso de producao "
+                  "ainda nao confirmados. Este workflow nao faz deploy.\n"
+              )
+          PY
+YAML
