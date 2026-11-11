@@ -454,4 +454,3 @@ jobs:
                   "ainda nao confirmados. Este workflow nao faz deploy.\n"
               )
           PY
-YAML
