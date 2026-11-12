@@ -68,7 +68,25 @@ def executar_pix(usuario, dados, idempotency_key=None):
     if origem["saldo"] < valor:
         raise ErroPix("Saldo insuficiente.")
 
-    # TM-20 (CWE-362): sem idempotência e sem controle de concorrência — Idempotency-Key ignorada
+    # TM-20: repetir a mesma Idempotency-Key para a mesma conta
+    # deve devolver a transacao original sem efetuar novo debito.
+    if idempotency_key:
+        existente = db.execute(
+            """
+            SELECT id, e2e, valor
+            FROM transacoes
+            WHERE conta_origem = ? AND idempotency_key = ?
+            """,
+            (origem["numero"], idempotency_key),
+        ).fetchone()
+
+        if existente:
+            return {
+                "id": existente["id"],
+                "e2e": existente["e2e"],
+                "valor": existente["valor"],
+                "comprovante": f"/comprovantes/{existente['id']}",
+            }
     db.execute("UPDATE contas SET saldo = saldo - ? WHERE numero = ?", (valor, origem["numero"]))
     db.execute("UPDATE contas SET saldo = saldo + ? WHERE numero = ?", (valor, destino["numero"]))
     e2e = psti_client.enviar_pacs008({"origem": origem["numero"], "destino": destino["numero"], "valor": valor})
@@ -130,7 +148,15 @@ def comprovante(tx_id):
     tx = db.execute("SELECT * FROM transacoes WHERE id = ?", (tx_id,)).fetchone()
     if tx is None:
         return render_template("comprovante.html", tx=None), 404
-    
+
+    conta_usuario = conta_do_usuario(g.usuario["id"])
+
+    if (
+        conta_usuario is None
+        or tx["conta_origem"] != conta_usuario["numero"]
+    ):
+        return render_template("comprovante.html", tx=None), 404
+
     def titular(numero):
         return db.execute("SELECT u.nome, u.cpf, c.agencia, c.numero FROM contas c JOIN usuarios u"
                           " ON u.id = c.usuario_id WHERE c.numero = ?", (numero,)).fetchone()

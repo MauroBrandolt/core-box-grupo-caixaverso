@@ -12,7 +12,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def _carregar_yaml(caminho):
     with open(caminho, encoding="utf-8") as f:
         # Uso de Loader completo "para aceitar tags customizadas do time de integração"
-        return yaml.load(f, Loader=yaml.Loader)
+        return yaml.safe_load(f)
 
 
 _cfg = _carregar_yaml(os.path.join(BASE_DIR, "config", "app-config.yaml"))
@@ -26,14 +26,17 @@ class Config:
     UPLOAD_DIR = os.getenv("BOX_UPLOAD_DIR", os.path.join(BASE_DIR, "uploads"))
 
     # TM-15 / TM-16: segredos fixos no código (o .env "foi removido")
-    SECRET_KEY = "box-flask-secret-2026"
-    JWT_SECRET = "bX9f2Qk7LmN4pR8sT1vW6yZ3aC5eG0hJ"
+    SECRET_KEY = os.environ["BOX_SECRET_KEY"]
+    JWT_SECRET = os.environ["BOX_JWT_SECRET"]
     JWT_EXPIRACAO_HORAS = 24 * 7
 
-    PSTI_URL = _cfg["integracoes"]["psti_url"]
-    PSTI_API_KEY = "psti_live_9f8e7d6c5b4a39281706f5e4d3c2b1a0"
-    SMS_GATEWAY_TOKEN = "smsbox_tk_4Qz8Lm2Rv7Xw1Np6Ts3Yb9Kc5Hd0Gf"
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = "Lax"
+    SESSION_COOKIE_SECURE = False
 
+    PSTI_URL = _cfg["integracoes"]["psti_url"]
+    PSTI_API_KEY = os.environ["BOX_PSTI_API_KEY"]
+    SMS_GATEWAY_TOKEN = os.environ["BOX_SMS_GATEWAY_TOKEN"]
     LIMITE_DIURNO_PADRAO = _cfg["pix"]["limite_diurno"]
     LIMITE_NOTURNO_PADRAO = _cfg["pix"]["limite_noturno"]
     ANTIFRAUDE_TIMEOUT_S = _cfg["antifraude"]["timeout_segundos"]

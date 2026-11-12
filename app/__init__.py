@@ -1,12 +1,11 @@
-"""Core Box — Core Bancário do Banco Box (versão de laboratório).
+"""Core Box: aplicacao de laboratorio. Nao usar em producao."""
 
-ATENÇÃO: esta aplicação contém vulnerabilidades INTENCIONAIS para fins de
-treinamento (Projeto Integrador DevSecOps — Dia 02). Não use em produção.
-"""
+import hmac
 import logging
-import traceback
+import secrets
 
-from flask import Flask, redirect, request, make_response
+from flask import Flask, abort, jsonify, redirect, request, session
+from werkzeug.exceptions import HTTPException
 
 from app import config, db
 
@@ -14,15 +13,51 @@ from app import config, db
 def create_app(test_config=None):
     app = Flask(__name__)
     app.config.from_object(config.Config)
+
     if test_config:
         app.config.update(test_config)
 
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
 
     db.init_app(app)
+
+    def gerar_csrf_token():
+        token = session.get("_csrf_token")
+        if token is None:
+            token = secrets.token_urlsafe(32)
+            session["_csrf_token"] = token
+        return token
+
+    app.jinja_env.globals["csrf_token"] = gerar_csrf_token
+
+    @app.before_request
+    def validar_csrf():
+        # Testes unitarios existentes validam regras de negocio diretamente.
+        if app.config.get("TESTING"):
+            return None
+
+        # Metodos sem alteracao de estado nao exigem token.
+        if request.method in {"GET", "HEAD", "OPTIONS", "TRACE"}:
+            return None
+
+        # APIs autenticadas com Bearer Token nao usam sessao de formulario.
+        if request.path.startswith("/api/"):
+            return None
+
+        token_sessao = session.get("_csrf_token")
+        token_formulario = request.form.get("csrf_token", "")
+
+        if (
+            not token_sessao
+            or not token_formulario
+            or not hmac.compare_digest(token_sessao, token_formulario)
+        ):
+            abort(400, description="Token CSRF ausente ou invalido.")
+
+        return None
 
     from app.auth import bp as auth_bp
     from app.contas import bp as contas_bp
@@ -44,18 +79,55 @@ def create_app(test_config=None):
 
     @app.route("/health")
     def health():
-        # TM-07: expõe versão e ambiente para "facilitar o suporte"
-        return {"status": "ok", "app": "core-box", "versao": config.Config.VERSAO,
-                "ambiente": config.Config.AMBIENTE, "debug": app.config["DEBUG"]}
+        # Nao divulgar versao, ambiente ou estado do debugger.
+        return {"status": "ok", "app": "core-box"}
 
     @app.errorhandler(Exception)
     def erro_generico(exc):
-        # TM-07 (CWE-209): devolve a stack trace completa ao cliente
-        detalhe = traceback.format_exc()
-        app.logger.error("Erro não tratado: %s", detalhe)
-        resp = make_response(
-            {"erro": str(exc), "tipo": exc.__class__.__name__, "trace": detalhe}, 500
+        # Preserva erros HTTP, como 404 e 405, e seus cabecalhos.
+        # Uma pagina inexistente nao deve virar erro interno.
+        if isinstance(exc, HTTPException) and exc.code < 500:
+            return exc
+
+        # Detalhes ficam somente nos logs do servidor.
+        app.logger.exception("Erro interno nao tratado")
+
+        return jsonify({"erro": "Erro interno do servidor"}), 500
+
+    @app.after_request
+    def aplicar_cabecalhos_seguranca(response):
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+
+        # Scripts e estilos devem ser carregados da propria origem.
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self'; "
+            "style-src 'self'; "
+            "img-src 'self' data:; "
+            "font-src 'self'; "
+            "connect-src 'self'; "
+            "object-src 'none'; "
+            "base-uri 'self'; "
+            "form-action 'self'; "
+            "frame-ancestors 'none'; "
+            "frame-src 'none'"
         )
-        return resp
+
+        response.headers["Permissions-Policy"] = (
+            "camera=(), microphone=(), geolocation=()"
+        )
+
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        response.headers["Cross-Origin-Embedder-Policy"] = "require-corp"
+        response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+
+        # Nao permitir cache de paginas e respostas potencialmente sensiveis.
+        # Arquivos estaticos mantem a politica de cache do Flask.
+        if request.endpoint != "static":
+            response.headers["Cache-Control"] = "no-store"
+
+        return response
 
     return app

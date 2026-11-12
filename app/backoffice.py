@@ -23,7 +23,13 @@ def login():
     if not u or not verificar_senha(request.form.get("senha", ""), u["senha_hash"]):
         return render_template("backoffice/login.html", erro="Credenciais inválidas"), 401
     resp = make_response(redirect("/backoffice"))
-    resp.set_cookie("box_token", emitir_token(u))
+    resp.set_cookie(
+        "box_token",
+        emitir_token(u),
+        httponly=True,
+        samesite="Lax",
+        secure=request.is_secure,
+    )
     return resp
 
 
@@ -67,20 +73,85 @@ def painel():
 @bp.route("/ajuste", methods=["POST"])
 @login_obrigatorio(perfil="operador")
 def ajuste():
-    conta = request.form.get("conta", "")
-    tipo = request.form.get("tipo", "credito")
-    valor = float(request.form.get("valor", "0"))
-    justificativa = request.form.get("justificativa", "")
-    # TM-10 (CWE-285): sem alçada, sem maker-checker, justificativa opcional
-    sinal = 1 if tipo == "credito" else -1
-    db.execute("UPDATE contas SET saldo = saldo + ? WHERE numero = ?", (sinal * valor, conta))
-    db.commit()
-    auditoria.registrar(g.usuario["nome"], "AJUSTE_SALDO",
-                        {"conta": conta, "tipo": tipo, "valor": valor, "justificativa": justificativa})
-    if request.headers.get("Accept") == "application/json":
-        return {"status": "efetivado", "conta": conta, "valor": valor}, 200
-    return redirect("/backoffice?q=" + conta)
+    db = get_db()
 
+    conta = request.form.get("conta", "").strip()
+    tipo = request.form.get("tipo", "credito").strip()
+    justificativa = request.form.get("justificativa", "").strip()
+
+    if not justificativa:
+        return {"erro": "Justificativa obrigatoria."}, 400
+
+    if tipo not in {"credito", "debito"}:
+        return {"erro": "Tipo de ajuste invalido."}, 400
+
+    try:
+        from decimal import Decimal
+        valor_decimal = Decimal(request.form.get("valor", "0"))
+        if not valor_decimal.is_finite() or valor_decimal <= 0:
+            return {"erro": "Valor invalido."}, 400
+        valor = float(valor_decimal)
+    except (TypeError, ValueError, OverflowError):
+        return {"erro": "Valor invalido."}, 400
+
+    if not __import__("math").isfinite(valor) or valor <= 0:
+        return {"erro": "Valor invalido."}, 400
+
+    conta_existente = db.execute(
+        "SELECT numero FROM contas WHERE numero = ?",
+        (conta,),
+    ).fetchone()
+
+    if conta_existente is None:
+        return {"erro": "Conta nao encontrada."}, 404
+
+    # TM-10: valores acima da alcada exigem segunda aprovacao.
+    # Nao movimentar saldo antes dessa aprovacao.
+    if valor > 10000:
+        auditoria.registrar(
+            g.usuario["nome"],
+            "AJUSTE_PENDENTE_APROVACAO",
+            {
+                "conta": conta,
+                "tipo": tipo,
+                "valor": valor,
+                "justificativa": justificativa,
+            },
+        )
+
+        return {
+            "status": "pendente_aprovacao",
+            "conta": conta,
+            "valor": valor,
+        }, 202
+
+    sinal = 1 if tipo == "credito" else -1
+
+    db.execute(
+        "UPDATE contas SET saldo = saldo + ? WHERE numero = ?",
+        (sinal * valor, conta),
+    )
+    db.commit()
+
+    auditoria.registrar(
+        g.usuario["nome"],
+        "AJUSTE_SALDO",
+        {
+            "conta": conta,
+            "tipo": tipo,
+            "valor": valor,
+            "justificativa": justificativa,
+        },
+    )
+
+    if request.headers.get("Accept") == "application/json":
+        return {
+            "status": "efetivado",
+            "conta": conta,
+            "valor": valor,
+        }, 200
+
+    return redirect("/backoffice?q=" + conta)
 
 @bp.route("/auditoria/limpar", methods=["POST"])
 @login_obrigatorio(perfil="operador")
@@ -112,5 +183,15 @@ def diagnostico():
     """Ferramenta "temporária" do suporte para testar conectividade com o PSTI."""
     host = request.args.get("host", "127.0.0.1")
     # Achado NOVO (não modelado no Dia 01): injeção de comando (CWE-78)
-    saida = os.popen("ping -c 1 " + host).read()
+    import subprocess
+    if host not in {"127.0.0.1", "psti-sandbox.bancobox.internal"}:
+        return {"erro": "Host nao autorizado."}, 400
+    try:
+        resultado = subprocess.run(
+            ["ping", "-c", "1", "-W", "2", "--", host],
+            capture_output=True, text=True, timeout=5, check=False
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return {"erro": "Falha no diagnostico."}, 502
+    saida = resultado.stdout
     return Response(saida or "sem resposta", mimetype="text/plain")
