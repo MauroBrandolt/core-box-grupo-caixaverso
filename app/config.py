@@ -30,6 +30,10 @@ class Config:
     JWT_SECRET = "bX9f2Qk7LmN4pR8sT1vW6yZ3aC5eG0hJ"
     JWT_EXPIRACAO_HORAS = 24 * 7
 
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = "Lax"
+    SESSION_COOKIE_SECURE = False
+
     PSTI_URL = _cfg["integracoes"]["psti_url"]
     PSTI_API_KEY = "psti_live_9f8e7d6c5b4a39281706f5e4d3c2b1a0"
     SMS_GATEWAY_TOKEN = "smsbox_tk_4Qz8Lm2Rv7Xw1Np6Ts3Yb9Kc5Hd0Gf"
