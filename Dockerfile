@@ -13,4 +13,5 @@ RUN python -m pip install --no-cache-dir --upgrade \
 ENV BOX_AMBIENTE=producao
 EXPOSE 8000
 
-CMD gunicorn -b 0.0.0.0:8000 --workers 1 --threads 4 wsgi:app
+CMD ["gunicorn", "-b", "0.0.0.0:8000", "--workers", "1", "--threads", "4", "wsgi:app"]
+
