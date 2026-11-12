@@ -86,7 +86,11 @@ def ajuste():
         return {"erro": "Tipo de ajuste invalido."}, 400
 
     try:
-        valor = float(request.form.get("valor", "0"))
+        from decimal import Decimal
+        valor_decimal = Decimal(request.form.get("valor", "0"))
+        if not valor_decimal.is_finite() or valor_decimal <= 0:
+            return {"erro": "Valor invalido."}, 400
+        valor = float(valor_decimal)
     except (TypeError, ValueError, OverflowError):
         return {"erro": "Valor invalido."}, 400
 

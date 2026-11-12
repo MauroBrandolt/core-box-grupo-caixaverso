@@ -5,3 +5,6 @@ __pycache__/
 
 # Backups
 *.py.bak
+
+# Backups locais de correcoes
+backup_semgrep_*/
