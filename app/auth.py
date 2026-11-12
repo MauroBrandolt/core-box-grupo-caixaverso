@@ -14,21 +14,78 @@ bp = Blueprint("auth", __name__)
 def _autenticar(cpf, senha):
     """Retorna (usuario, erro, status_http)."""
     db = get_db()
+    agora = datetime.datetime.now()
+
+    tentativa = db.execute(
+        "SELECT falhas, bloqueado_ate FROM tentativas_login WHERE cpf = ?",
+        (cpf,),
+    ).fetchone()
+
+    if tentativa and tentativa["bloqueado_ate"]:
+        try:
+            bloqueado_ate = datetime.datetime.fromisoformat(
+                tentativa["bloqueado_ate"]
+            )
+        except ValueError:
+            bloqueado_ate = agora
+
+        if bloqueado_ate > agora:
+            return None, "Acesso temporariamente bloqueado.", 429
+
+        db.execute(
+            "DELETE FROM tentativas_login WHERE cpf = ?",
+            (cpf,),
+        )
+        db.commit()
+        tentativa = None
 
     usuario = db.execute(
         "SELECT * FROM usuarios WHERE cpf = ?",
-        (cpf,)
+        (cpf,),
     ).fetchone()
 
-    # TM-23: não revelar se o CPF existe
-    if usuario is None:
-        return None, "Credenciais inválidas.", 401
+    credencial_valida = (
+        usuario is not None
+        and verificar_senha(senha, usuario["senha_hash"])
+    )
 
-    # TM-01: ainda sem limitação de tentativas
-    if not verificar_senha(senha, usuario["senha_hash"]):
-        return None, "Credenciais inválidas.", 401
+    if not credencial_valida:
+        falhas = (tentativa["falhas"] if tentativa else 0) + 1
+        bloqueado_ate = None
+
+        if falhas >= 5:
+            bloqueado_ate = (
+                agora + datetime.timedelta(minutes=15)
+            ).isoformat(timespec="seconds")
+
+        db.execute(
+            """
+            INSERT INTO tentativas_login (cpf, falhas, bloqueado_ate)
+            VALUES (?, ?, ?)
+            ON CONFLICT(cpf) DO UPDATE SET
+                falhas = excluded.falhas,
+                bloqueado_ate = excluded.bloqueado_ate
+            """,
+            (cpf, falhas, bloqueado_ate),
+        )
+        db.commit()
+
+        status = 429 if bloqueado_ate else 401
+        mensagem = (
+            "Acesso temporariamente bloqueado."
+            if bloqueado_ate
+            else "Credenciais inválidas."
+        )
+        return None, mensagem, status
+
+    db.execute(
+        "DELETE FROM tentativas_login WHERE cpf = ?",
+        (cpf,),
+    )
+    db.commit()
 
     return usuario, None, 200
+
 
 def _vincular_dispositivo(usuario):
     # TM-25: vínculo automático de qualquer dispositivo, sem step-up

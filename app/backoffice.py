@@ -73,20 +73,81 @@ def painel():
 @bp.route("/ajuste", methods=["POST"])
 @login_obrigatorio(perfil="operador")
 def ajuste():
-    conta = request.form.get("conta", "")
-    tipo = request.form.get("tipo", "credito")
-    valor = float(request.form.get("valor", "0"))
-    justificativa = request.form.get("justificativa", "")
-    # TM-10 (CWE-285): sem alçada, sem maker-checker, justificativa opcional
-    sinal = 1 if tipo == "credito" else -1
-    db.execute("UPDATE contas SET saldo = saldo + ? WHERE numero = ?", (sinal * valor, conta))
-    db.commit()
-    auditoria.registrar(g.usuario["nome"], "AJUSTE_SALDO",
-                        {"conta": conta, "tipo": tipo, "valor": valor, "justificativa": justificativa})
-    if request.headers.get("Accept") == "application/json":
-        return {"status": "efetivado", "conta": conta, "valor": valor}, 200
-    return redirect("/backoffice?q=" + conta)
+    db = get_db()
 
+    conta = request.form.get("conta", "").strip()
+    tipo = request.form.get("tipo", "credito").strip()
+    justificativa = request.form.get("justificativa", "").strip()
+
+    if not justificativa:
+        return {"erro": "Justificativa obrigatoria."}, 400
+
+    if tipo not in {"credito", "debito"}:
+        return {"erro": "Tipo de ajuste invalido."}, 400
+
+    try:
+        valor = float(request.form.get("valor", "0"))
+    except (TypeError, ValueError):
+        return {"erro": "Valor invalido."}, 400
+
+    if valor <= 0:
+        return {"erro": "Valor invalido."}, 400
+
+    conta_existente = db.execute(
+        "SELECT numero FROM contas WHERE numero = ?",
+        (conta,),
+    ).fetchone()
+
+    if conta_existente is None:
+        return {"erro": "Conta nao encontrada."}, 404
+
+    # TM-10: valores acima da alcada exigem segunda aprovacao.
+    # Nao movimentar saldo antes dessa aprovacao.
+    if valor > 10000:
+        auditoria.registrar(
+            g.usuario["nome"],
+            "AJUSTE_PENDENTE_APROVACAO",
+            {
+                "conta": conta,
+                "tipo": tipo,
+                "valor": valor,
+                "justificativa": justificativa,
+            },
+        )
+
+        return {
+            "status": "pendente_aprovacao",
+            "conta": conta,
+            "valor": valor,
+        }, 202
+
+    sinal = 1 if tipo == "credito" else -1
+
+    db.execute(
+        "UPDATE contas SET saldo = saldo + ? WHERE numero = ?",
+        (sinal * valor, conta),
+    )
+    db.commit()
+
+    auditoria.registrar(
+        g.usuario["nome"],
+        "AJUSTE_SALDO",
+        {
+            "conta": conta,
+            "tipo": tipo,
+            "valor": valor,
+            "justificativa": justificativa,
+        },
+    )
+
+    if request.headers.get("Accept") == "application/json":
+        return {
+            "status": "efetivado",
+            "conta": conta,
+            "valor": valor,
+        }, 200
+
+    return redirect("/backoffice?q=" + conta)
 
 @bp.route("/auditoria/limpar", methods=["POST"])
 @login_obrigatorio(perfil="operador")
