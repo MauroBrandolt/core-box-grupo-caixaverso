@@ -53,7 +53,14 @@ def login():
     auditoria.registrar(cpf, "LOGIN_OK", {"cpf": cpf, "token": token, "ip": request.remote_addr})
     resp = make_response(redirect("/home"))
     # Cookie sem HttpOnly/Secure/SameSite (achado típico de DAST no Dia 02/03)
-    resp.set_cookie("box_token", token, max_age=60 * 60 * 24 * 7)
+    resp.set_cookie(
+        "box_token",
+        token,
+        max_age=60 * 60 * 24 * 7,
+        httponly=True,
+        samesite="Lax",
+        secure=request.is_secure,
+    )
     return resp
 
 
@@ -71,7 +78,12 @@ def api_login():
 @bp.route("/logout")
 def logout():
     resp = make_response(redirect("/login"))
-    resp.delete_cookie("box_token")
+    resp.delete_cookie(
+        "box_token",
+        httponly=True,
+        samesite="Lax",
+        secure=request.is_secure,
+    )
     return resp
 
 
