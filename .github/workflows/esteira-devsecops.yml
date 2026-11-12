@@ -373,6 +373,10 @@ jobs:
 
           docker run -d \
             --name core-box-homolog \
+            -e BOX_SECRET_KEY="$(openssl rand -hex 32)" \
+            -e BOX_JWT_SECRET="$(openssl rand -hex 32)" \
+            -e BOX_PSTI_API_KEY="$(openssl rand -hex 32)" \
+            -e BOX_SMS_GATEWAY_TOKEN="$(openssl rand -hex 32)" \
             -p 127.0.0.1:8000:8000 \
             "$IMAGEM"
 
