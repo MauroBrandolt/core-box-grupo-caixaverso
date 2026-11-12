@@ -62,12 +62,11 @@ def create_app(test_config=None):
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-Content-Type-Options"] = "nosniff"
 
-        # Os templates atuais usam atributos style inline.
-        # Scripts inline continuam bloqueados.
+        # Scripts e estilos devem ser carregados da propria origem.
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
             "script-src 'self'; "
-            "style-src 'self' 'unsafe-inline'; "
+            "style-src 'self'; "
             "img-src 'self' data:; "
             "font-src 'self'; "
             "connect-src 'self'; "
