@@ -2,7 +2,7 @@
 {% block conteudo %}<div class="row"><div class="card">
 <h2 class="cb-style-c6967784dae5">Pix — Nova transferência</h2>
 {% if erro %}<div class="err">{{ erro }}</div>{% endif %}
-<form method="post" action="/pix">
+<form method="post" action="/pix"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <input type="hidden" name="conta_origem" value="{{ conta_origem }}">
 <label>Chave Pix do recebedor</label><input name="chave" placeholder="CPF, celular, e-mail ou chave aleatória">
 <label>Valor</label><input name="valor" placeholder="0,00">

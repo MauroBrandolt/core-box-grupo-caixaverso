@@ -1,8 +1,10 @@
 """Core Box: aplicacao de laboratorio. Nao usar em producao."""
 
+import hmac
 import logging
+import secrets
 
-from flask import Flask, jsonify, redirect, request
+from flask import Flask, abort, jsonify, redirect, request, session
 from werkzeug.exceptions import HTTPException
 
 from app import config, db
@@ -21,6 +23,41 @@ def create_app(test_config=None):
     )
 
     db.init_app(app)
+
+    def gerar_csrf_token():
+        token = session.get("_csrf_token")
+        if token is None:
+            token = secrets.token_urlsafe(32)
+            session["_csrf_token"] = token
+        return token
+
+    app.jinja_env.globals["csrf_token"] = gerar_csrf_token
+
+    @app.before_request
+    def validar_csrf():
+        # Testes unitarios existentes validam regras de negocio diretamente.
+        if app.config.get("TESTING"):
+            return None
+
+        # Metodos sem alteracao de estado nao exigem token.
+        if request.method in {"GET", "HEAD", "OPTIONS", "TRACE"}:
+            return None
+
+        # APIs autenticadas com Bearer Token nao usam sessao de formulario.
+        if request.path.startswith("/api/"):
+            return None
+
+        token_sessao = session.get("_csrf_token")
+        token_formulario = request.form.get("csrf_token", "")
+
+        if (
+            not token_sessao
+            or not token_formulario
+            or not hmac.compare_digest(token_sessao, token_formulario)
+        ):
+            abort(400, description="Token CSRF ausente ou invalido.")
+
+        return None
 
     from app.auth import bp as auth_bp
     from app.contas import bp as contas_bp
