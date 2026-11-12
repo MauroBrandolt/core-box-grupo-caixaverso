@@ -33,15 +33,22 @@ def executar_pix(usuario, dados, idempotency_key=None):
              request.headers.get("Authorization") or request.cookies.get("box_token"))
 
     # TM-03 (CWE-639 / API1:2023 BOLA): conta de origem vem do cliente
-    conta_origem = dados.get("conta_origem") or conta_do_usuario(usuario["id"])["numero"]
+    conta_usuario = conta_do_usuario(usuario["id"])
+    conta_informada = dados.get("conta_origem")
+    if conta_informada and conta_informada != conta_usuario["numero"]:
+    	raise ErroPix("Conta de origem não autorizada.", 403)
+    conta_origem = conta_usuario["numero"]
     origem = db.execute("SELECT * FROM contas WHERE numero = ?", (conta_origem,)).fetchone()
     if origem is None:
         raise ErroPix("Conta de origem inexistente.", 404)
 
     # TM-07: float() sem tratamento — valor inválido gera exceção com stack trace
-    valor = float(dados.get("valor"))
+    try:
+    	valor = float(dados.get("valor"))
+    except (TypeError, ValueError):
+    	raise ErroPix("Valor inválido.", 422)
     if valor <= 0:
-        raise ErroPix("Valor inválido.")
+    	raise ErroPix("Valor inválido.", 422)
 
     chave = (dados.get("chave") or "").strip()
     destino_num = db.execute("SELECT conta_numero FROM chaves_pix WHERE chave = ?", (chave,)).fetchone()
@@ -50,9 +57,10 @@ def executar_pix(usuario, dados, idempotency_key=None):
     destino = db.execute("SELECT * FROM contas WHERE numero = ?", (destino_num[0],)).fetchone()
 
     # TM-04 (CWE-602): limite pode ser ignorado por parâmetro enviado pelo cliente
-    override = str(dados.get("limite_override", "")).lower() in ("1", "true", "sim")
-    if not override and valor > _limite_vigente(origem):
-        raise ErroPix(f"Valor acima do seu limite atual de R$ {_limite_vigente(origem):.2f}.")
+    limite = _limite_vigente(origem)
+    if valor > limite:
+    	raise ErroPix(
+        	f"Valor acima do seu limite atual de R$ {limite:.2f}.",422)
 
     if not antifraude.avaliar({"valor": valor, "descricao": dados.get("descricao"), "cpf": usuario["cpf"]}):
         raise ErroPix("Transação não autorizada pela análise de segurança.", 403)
@@ -115,12 +123,14 @@ def consulta_dict(chave):
 
 
 @bp.route("/comprovantes/<int:tx_id>")
+@login_obrigatorio()
 def comprovante(tx_id):
     # TM-08: comprovante público, sem autenticação, ID sequencial, CPF completo
     db = get_db()
     tx = db.execute("SELECT * FROM transacoes WHERE id = ?", (tx_id,)).fetchone()
     if tx is None:
         return render_template("comprovante.html", tx=None), 404
+    
     def titular(numero):
         return db.execute("SELECT u.nome, u.cpf, c.agencia, c.numero FROM contas c JOIN usuarios u"
                           " ON u.id = c.usuario_id WHERE c.numero = ?", (numero,)).fetchone()

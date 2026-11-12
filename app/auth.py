@@ -1,4 +1,4 @@
-"""Login, recuperação de senha e troca de celular (telas T1 e T2 do Dia 01)."""
+"""Login, recuperacao de senha e troca de celular."""
 import datetime
 import random
 
@@ -14,15 +14,21 @@ bp = Blueprint("auth", __name__)
 def _autenticar(cpf, senha):
     """Retorna (usuario, erro, status_http)."""
     db = get_db()
-    usuario = db.execute("SELECT * FROM usuarios WHERE cpf = ?", (cpf,)).fetchone()
-    # TM-23 (CWE-204): mensagens e status diferentes revelam quem é cliente
-    if usuario is None:
-        return None, "CPF não cadastrado no Banco Box.", 404
-    # TM-01 (CWE-307): nenhuma limitação de tentativas
-    if not verificar_senha(senha, usuario["senha_hash"]):
-        return None, "Senha incorreta. Tente novamente.", 401
-    return usuario, None, 200
 
+    usuario = db.execute(
+        "SELECT * FROM usuarios WHERE cpf = ?",
+        (cpf,)
+    ).fetchone()
+
+    # TM-23: não revelar se o CPF existe
+    if usuario is None:
+        return None, "Credenciais inválidas.", 401
+
+    # TM-01: ainda sem limitação de tentativas
+    if not verificar_senha(senha, usuario["senha_hash"]):
+        return None, "Credenciais inválidas.", 401
+
+    return usuario, None, 200
 
 def _vincular_dispositivo(usuario):
     # TM-25: vínculo automático de qualquer dispositivo, sem step-up
