@@ -13,7 +13,7 @@ permissions:
 # MODO AUDITORIA.
 # No Lab 2, mudar para "false" para ativar os gates.
 env:
-  MODO_AUDITORIA: "true"
+  MODO_AUDITORIA: "false"
 
 defaults:
   run:
