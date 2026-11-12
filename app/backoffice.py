@@ -30,23 +30,43 @@ def login():
 @bp.route("")
 @login_obrigatorio(perfil="operador")
 def painel():
-    termo = request.args.get("q", "")
+    termo = request.args.get("q", "").strip()
     db = get_db()
     clientes = []
-    if termo:
-        # TM-29 (CWE-89): SQL montado por concatenação
-        sql = """SELECT * FROM usuarios wHERE nome LIKE ?"""
-        rows = db.execute(sql,(f"%{q}%",)).fetchall()
-    eventos = db.execute("SELECT * FROM auditoria ORDER BY id DESC LIMIT 15").fetchall()
-    total = db.execute("SELECT COUNT(*) FROM usuarios").fetchone()[0]
-    return render_template("backoffice/painel.html", usuario=g.usuario, clientes=clientes,
-                           termo=termo, eventos=eventos, total=total)
 
+    if termo:
+        # TM-29 (CWE-89): consulta parametrizada para evitar SQL Injection
+        sql = """
+            SELECT u.nome, u.cpf, u.senha_hash, c.numero, c.saldo
+            FROM usuarios u
+            JOIN contas c ON c.usuario_id = u.id
+            WHERE u.nome LIKE ? OR u.cpf = ?
+        """
+        clientes = db.execute(
+            sql,
+            (f"%{termo}%", termo)
+        ).fetchall()
+
+    eventos = db.execute(
+        "SELECT * FROM auditoria ORDER BY id DESC LIMIT 15"
+    ).fetchall()
+
+    total = db.execute(
+        "SELECT COUNT(*) FROM usuarios"
+    ).fetchone()[0]
+
+    return render_template(
+        "backoffice/painel.html",
+        usuario=g.usuario,
+        clientes=clientes,
+        termo=termo,
+        eventos=eventos,
+        total=total
+    )
 
 @bp.route("/ajuste", methods=["POST"])
 @login_obrigatorio(perfil="operador")
 def ajuste():
-    db = get_db()
     conta = request.form.get("conta", "")
     tipo = request.form.get("tipo", "credito")
     valor = float(request.form.get("valor", "0"))
