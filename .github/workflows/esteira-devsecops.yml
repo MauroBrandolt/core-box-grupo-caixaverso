@@ -50,6 +50,7 @@ jobs:
             ghcr.io/gitleaks/gitleaks:v8.24.2 \
             git /codigo \
             --log-opts="--all" \
+            --baseline-path=/codigo/.gitleaks-baseline.json \
             --redact \
             --report-format=json \
             --report-path=/relatorios/gitleaks.json \
