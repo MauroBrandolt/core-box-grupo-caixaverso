@@ -134,6 +134,10 @@ jobs:
       - name: Executar testes
         continue-on-error: ${{ env.MODO_AUDITORIA == 'true' }}
         run: |
+          export BOX_SECRET_KEY="$(openssl rand -hex 32)"
+          export BOX_JWT_SECRET="$(openssl rand -hex 32)"
+          export BOX_PSTI_API_KEY="$(openssl rand -hex 32)"
+          export BOX_SMS_GATEWAY_TOKEN="$(openssl rand -hex 32)"
           .venv/bin/python -m pytest -v --junitxml=junit.xml
 
       - name: Empacotar codigo e verificar SHA-256
