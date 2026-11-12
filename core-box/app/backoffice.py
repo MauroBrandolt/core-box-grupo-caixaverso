@@ -35,9 +35,8 @@ def painel():
     clientes = []
     if termo:
         # TM-29 (CWE-89): SQL montado por concatenação
-        sql = ("SELECT u.nome, u.cpf, u.senha_hash, c.numero, c.saldo FROM usuarios u "
-               "JOIN contas c ON c.usuario_id = u.id WHERE u.nome LIKE '%" + termo + "%' OR u.cpf = '" + termo + "'")
-        clientes = db.execute(sql).fetchall()
+        sql = """SELECT * FROM usuarios wHERE nome LIKE ?"""
+        rows = db.execute(sql,(f"%{q}%",)).fetchall()
     eventos = db.execute("SELECT * FROM auditoria ORDER BY id DESC LIMIT 15").fetchall()
     total = db.execute("SELECT COUNT(*) FROM usuarios").fetchone()[0]
     return render_template("backoffice/painel.html", usuario=g.usuario, clientes=clientes,
