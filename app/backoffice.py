@@ -87,10 +87,10 @@ def ajuste():
 
     try:
         valor = float(request.form.get("valor", "0"))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return {"erro": "Valor invalido."}, 400
 
-    if valor <= 0:
+    if not __import__("math").isfinite(valor) or valor <= 0:
         return {"erro": "Valor invalido."}, 400
 
     conta_existente = db.execute(
@@ -179,5 +179,15 @@ def diagnostico():
     """Ferramenta "temporária" do suporte para testar conectividade com o PSTI."""
     host = request.args.get("host", "127.0.0.1")
     # Achado NOVO (não modelado no Dia 01): injeção de comando (CWE-78)
-    saida = os.popen("ping -c 1 " + host).read()
+    import subprocess
+    if host not in {"127.0.0.1", "psti-sandbox.bancobox.internal"}:
+        return {"erro": "Host nao autorizado."}, 400
+    try:
+        resultado = subprocess.run(
+            ["ping", "-c", "1", "-W", "2", "--", host],
+            capture_output=True, text=True, timeout=5, check=False
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return {"erro": "Falha no diagnostico."}, 502
+    saida = resultado.stdout
     return Response(saida or "sem resposta", mimetype="text/plain")
