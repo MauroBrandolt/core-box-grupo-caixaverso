@@ -1,0 +1,107 @@
+rules:
+  # Regra-base do kit: a conta de origem de uma transferencia
+  # nao pode ser definida diretamente pelo corpo da requisicao.
+  - id: box.tm03.conta-origem-controlada-pelo-cliente
+    languages:
+      - python
+    severity: ERROR
+
+    message: >-
+      TM-03: a conta de origem do Pix esta sendo obtida diretamente
+      de dado controlado pelo cliente. Obtenha a conta a partir do
+      usuario autenticado e trate qualquer divergencia como tentativa
+      de acesso nao autorizado.
+
+    metadata:
+      threat_model: TM-03
+      cwe:
+        - "CWE-639: Authorization Bypass Through User-Controlled Key"
+      category: security
+      confidence: HIGH
+      technology:
+        - flask
+      references:
+        - "API1:2023 Broken Object Level Authorization"
+
+    patterns:
+      - pattern-either:
+          - pattern: |
+              conta_origem = $DADOS.get("conta_origem")
+          - pattern: |
+              conta_origem = $DADOS["conta_origem"]
+          - pattern: |
+              $CONTA = request.form.get("conta_origem", ...)
+          - pattern: |
+              $CONTA = request.json.get("conta_origem", ...)
+
+
+  # Regra nova 1: limite_override nao pode autorizar a
+  # superacao do limite calculado no servidor.
+  - id: box.tm04.limite-override-controlado-pelo-cliente
+    languages:
+      - python
+    severity: ERROR
+
+    message: >-
+      TM-04: limite_override vindo da requisicao esta sendo usado pela
+      aplicacao. O limite Pix deve ser calculado e imposto no servidor,
+      sem possibilidade de override pelo cliente.
+
+    metadata:
+      threat_model: TM-04
+      cwe:
+        - "CWE-602: Client-Side Enforcement of Server-Side Security"
+      category: security
+      confidence: HIGH
+      technology:
+        - flask
+
+    pattern-either:
+      - pattern: |
+          if $DADOS.get("limite_override"):
+              ...
+      - pattern: |
+          if $DADOS["limite_override"]:
+              ...
+      - pattern: |
+          $OVERRIDE = $DADOS.get("limite_override", ...)
+      - pattern: |
+          $OVERRIDE = request.form.get("limite_override", ...)
+      - pattern: |
+          $OVERRIDE = request.json.get("limite_override", ...)
+
+
+  # Regra nova 2: credenciais e tokens nao podem aparecer
+  # em chamadas de log.
+  - id: box.tm06.credencial-ou-token-em-log
+    languages:
+      - python
+    severity: ERROR
+
+    message: >-
+      TM-06: token, cookie de autenticacao ou cabecalho Authorization
+      esta sendo enviado ao log. Registre somente identificadores
+      operacionais nao secretos e dados previamente sanitizados.
+
+    metadata:
+      threat_model: TM-06
+      cwe:
+        - "CWE-532: Insertion of Sensitive Information into Log File"
+      category: security
+      confidence: HIGH
+      technology:
+        - flask
+
+    pattern-either:
+      - pattern: |
+          $LOG.$METODO(..., request.headers.get("Authorization"), ...)
+      - pattern: |
+          $LOG.$METODO(..., request.headers["Authorization"], ...)
+      - pattern: |
+          $LOG.$METODO(..., request.cookies.get("box_token"), ...)
+      - patterns:
+          - pattern: |
+              $LOG.$METODO(..., $TOKEN, ...)
+          - metavariable-regex:
+              metavariable: $TOKEN
+              regex: (?i).*(token|authorization|box_token|jwt|secret).*
