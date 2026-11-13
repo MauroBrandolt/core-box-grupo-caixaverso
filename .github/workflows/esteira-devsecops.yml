@@ -510,12 +510,13 @@ jobs:
       - name: Enviar arquivos para a VPS
         env:
           PROD_HOST: ${{ vars.PROD_HOST }}
+          PROD_SSH_PORT: ${{ vars.PROD_SSH_PORT || '8080' }}
         run: |
           ssh \
             -i "$HOME/.ssh/deploy_corebox" \
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
             -o StrictHostKeyChecking=yes \
-            -p 22 \
+            -p "$PROD_SSH_PORT" \
             "deploy@${PROD_HOST}" \
             'install -d -m 700 /opt/core-box'
 
@@ -523,7 +524,7 @@ jobs:
             -i "$HOME/.ssh/deploy_corebox" \
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
             -o StrictHostKeyChecking=yes \
-            -P 22 \
+            -P "$PROD_SSH_PORT" \
             deploy/docker-compose.prod.yml \
             deploy/deploy.sh \
             "$RUNNER_TEMP/core-box.env" \
@@ -533,7 +534,7 @@ jobs:
             -i "$HOME/.ssh/deploy_corebox" \
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
             -o StrictHostKeyChecking=yes \
-            -p 22 \
+            -p "$PROD_SSH_PORT" \
             "deploy@${PROD_HOST}" \
             'chmod 750 /opt/core-box/deploy.sh &&
              chmod 600 /opt/core-box/core-box.env'
@@ -542,13 +543,14 @@ jobs:
         id: deploy
         env:
           PROD_HOST: ${{ vars.PROD_HOST }}
+          PROD_SSH_PORT: ${{ vars.PROD_SSH_PORT || '8080' }}
           IMAGEM: ${{ needs.docker.outputs.referencia }}
         run: |
           ssh \
             -i "$HOME/.ssh/deploy_corebox" \
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
             -o StrictHostKeyChecking=yes \
-            -p 22 \
+            -p "$PROD_SSH_PORT" \
             "deploy@${PROD_HOST}" \
             "cd /opt/core-box &&
              IMAGEM='${IMAGEM}' ./deploy.sh"
@@ -592,14 +594,17 @@ jobs:
           exit 1
 
       - name: Registrar evidencia
+        if: always()
         env:
           IMAGEM: ${{ needs.docker.outputs.referencia }}
           PROD_HOST: ${{ vars.PROD_HOST }}
+          PROD_SSH_PORT: ${{ vars.PROD_SSH_PORT || '8080' }}
         run: |
           {
             echo "commit=${GITHUB_SHA}"
+            echo "resultado_job=${{ job.status }}"
             echo "imagem=${IMAGEM}"
-            echo "destino=deploy@${PROD_HOST}:22"
+            echo "destino=deploy@${PROD_HOST}:${PROD_SSH_PORT}"
             echo "diretorio=/opt/core-box"
             echo "environment=producao"
             echo "health=http://${PROD_HOST}/health"
