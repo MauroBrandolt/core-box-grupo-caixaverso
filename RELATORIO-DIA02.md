@@ -9,7 +9,7 @@
 - Suíte local final antes da entrega: **20 passed**
 - Deploy aprovado por: **preencher após aprovação da Etapa 8**
 - Imagem implantada: **preencher com `ghcr.io/...@sha256:...` após o deploy**
-- Destino previsto do laboratório: `deploy@3.142.97.137:22`
+- Destino previsto do laboratório: `deploy@3.142.97.137:8080`
 - Diretório de produção: `/opt/core-box`
 
 > Os campos de execução final, aprovador e digest somente serão preenchidos
@@ -273,7 +273,7 @@ Resumo:
 
 ID	TM	Risco	Prazo
 EXC-001	TM-13	HTTP sem TLS no laboratório	Dia 04
-EXC-002	TM-14	SSH TCP/22 para deploy	Dia 04
+EXC-002	TM-14	SSH TCP/8080 para deploy	Dia 04
 EXC-003	TM-15 / TM-31	Chave SSH persistente	Dia 04
 
 Plano do Dia 04:
