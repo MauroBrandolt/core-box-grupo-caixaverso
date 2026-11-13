@@ -1,28 +1,58 @@
 #!/usr/bin/env bash
-# Deploy do Core Box na VPS (executado NA EC2, via SSH, pela etapa 8 da esteira).
-# Uso: IMAGEM=ghcr.io/<owner>/<repo>:<tag> [GHCR_USER=.. GHCR_TOKEN=..] ./deploy.sh
-set -euo pipefail
+set -Eeuo pipefail
 
-: "${IMAGEM:?informe IMAGEM=ghcr.io/<owner>/<repo>:<tag>}"
-DIR="$(cd "$(dirname "$0")" && pwd)"
+cd /opt/core-box
 
-if [[ -n "${GHCR_TOKEN:-}" ]]; then
-  echo "$GHCR_TOKEN" | docker login ghcr.io -u "${GHCR_USER:?}" --password-stdin
-fi
+: "${IMAGEM:?A referencia IMAGEM e obrigatoria}"
 
-echo ">> Baixando $IMAGEM"
-IMAGEM="$IMAGEM" docker compose -f "$DIR/docker-compose.prod.yml" pull
-echo ">> Subindo nova versão"
-IMAGEM="$IMAGEM" docker compose -f "$DIR/docker-compose.prod.yml" up -d --remove-orphans
+case "$IMAGEM" in
+  *@sha256:*)
+    ;;
+  *)
+    echo "ERRO: deploy recusado porque a imagem nao usa digest."
+    exit 1
+    ;;
+esac
 
-echo ">> Verificando saúde"
-for i in $(seq 1 30); do
-  if curl -fsS http://127.0.0.1/health >/dev/null; then
-    echo ">> Core Box no ar: $IMAGEM"
-    docker image prune -f >/dev/null
+export IMAGEM
+
+docker compose \
+  --file docker-compose.prod.yml \
+  config --quiet
+
+docker compose \
+  --file docker-compose.prod.yml \
+  pull
+
+docker compose \
+  --file docker-compose.prod.yml \
+  up --detach --remove-orphans
+
+for tentativa in $(seq 1 30); do
+  STATUS="$(
+    docker inspect \
+      --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}sem-healthcheck{{end}}' \
+      core-box 2>/dev/null || true
+  )"
+
+  if [ "$STATUS" = "healthy" ]; then
+    docker inspect \
+      --format='Imagem implantada: {{.Config.Image}}' \
+      core-box
+
+    echo "Deploy concluido com saude."
     exit 0
   fi
-  sleep 2
+
+  echo "Aguardando saude: tentativa $tentativa, status=$STATUS"
+  sleep 4
 done
-echo "!! Health check falhou — verifique 'docker compose logs'" >&2
+
+docker compose \
+  --file docker-compose.prod.yml \
+  ps
+
+docker logs core-box || true
+
+echo "ERRO: aplicacao nao ficou saudavel."
 exit 1

@@ -21,7 +21,8 @@ _cfg = _carregar_yaml(os.path.join(BASE_DIR, "config", "app-config.yaml"))
 class Config:
     VERSAO = _cfg["app"]["versao"]
     AMBIENTE = os.getenv("BOX_AMBIENTE", _cfg["app"]["ambiente"])
-    DEBUG = True  # TM-07: debug ligado em todos os ambientes
+    # TM-07: debug desabilitado por padrao.
+    DEBUG = os.getenv("BOX_DEBUG", "false").lower() == "true"
     DATABASE = os.getenv("BOX_DATABASE", os.path.join(BASE_DIR, "box.db"))
     UPLOAD_DIR = os.getenv("BOX_UPLOAD_DIR", os.path.join(BASE_DIR, "uploads"))
 
@@ -32,7 +33,10 @@ class Config:
 
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = "Lax"
-    SESSION_COOKIE_SECURE = False
+    # Dia 02 usa HTTP; quando houver HTTPS, definir BOX_SESSION_COOKIE_SECURE=true.
+    SESSION_COOKIE_SECURE = (
+        os.getenv("BOX_SESSION_COOKIE_SECURE", "false").lower() == "true"
+    )
 
     PSTI_URL = _cfg["integracoes"]["psti_url"]
     PSTI_API_KEY = os.environ["BOX_PSTI_API_KEY"]

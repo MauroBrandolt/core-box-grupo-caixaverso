@@ -1,10 +1,46 @@
-
 # Python
 __pycache__/
-*.pyc
+**/__pycache__/
+*.py[cod]
+*.pyo
 
-# Backups
+# Virtual environments
+.venv/
+venv/
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+junit.xml
+
+# Relatorios gerados localmente
+semgrep.json
+trivy*.json
+sbom*.json
+*.log
+
+# Segredos e configuracoes locais
+.env
+.env.*
+!.env.example
+core-box.env
+deploy/core-box.env
+
+# Chaves
+deploy_corebox
+deploy_corebox.pub
+*.pem
+*.key
+
+# Dados locais de runtime
+box.db
+data/
+uploads/
+
+# Backups e temporarios
+*.bak
+*.tmp
 *.py.bak
-
-# Backups locais de correcoes
 backup_semgrep_*/
+.DS_Store

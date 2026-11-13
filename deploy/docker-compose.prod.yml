@@ -1,16 +1,33 @@
-# Usado na VPS Debian 12 (EC2) pelo script deploy.sh.
-# A variável IMAGEM é informada pela esteira (ex.: ghcr.io/minha-org/core-box:sha-abc1234)
 services:
   core-box:
-    image: ${IMAGEM:?defina a variavel IMAGEM}
+    image: ${IMAGEM:?A variavel IMAGEM com digest e obrigatoria}
+    container_name: core-box
     restart: unless-stopped
+
+    env_file:
+      - core-box.env
+
     ports:
       - "80:8000"
-    environment:
-      BOX_AMBIENTE: producao
-      BOX_DATABASE: /dados/box.db
-      BOX_UPLOAD_DIR: /dados/uploads
+
     volumes:
-      - dados:/dados
-volumes:
-  dados:
+      - ./data:/app/data
+      - ./uploads:/app/uploads
+
+    security_opt:
+      - no-new-privileges:true
+
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen(
+          "http://127.0.0.1:8000/health",
+          timeout=3).read()
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s

@@ -417,6 +417,211 @@ jobs:
         if: always()
         run: docker rm -f core-box-homolog || true
 
+
+  producao:
+    name: "8. Aprovacao manual e producao"
+    needs:
+      - docker
+      - trivy_imagem
+      - homologacao
+
+    # Somente o merge/push na main pode solicitar deploy.
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main'
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    environment:
+      name: producao
+      url: http://${{ vars.PROD_HOST }}/login
+
+    permissions:
+      contents: read
+      packages: read
+
+    outputs:
+      imagem: ${{ steps.deploy.outputs.imagem }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validar configuracao e digest
+        env:
+          PROD_HOST: ${{ vars.PROD_HOST }}
+          IMAGEM: ${{ needs.docker.outputs.referencia }}
+          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+          PROD_KNOWN_HOSTS: ${{ secrets.PROD_KNOWN_HOSTS }}
+          BOX_SECRET_KEY: ${{ secrets.BOX_SECRET_KEY }}
+          BOX_JWT_SECRET: ${{ secrets.BOX_JWT_SECRET }}
+          BOX_PSTI_API_KEY: ${{ secrets.BOX_PSTI_API_KEY }}
+          BOX_SMS_GATEWAY_TOKEN: ${{ secrets.BOX_SMS_GATEWAY_TOKEN }}
+        run: |
+          test -n "$PROD_HOST"
+          test -n "$IMAGEM"
+          test -n "$PROD_SSH_KEY"
+          test -n "$PROD_KNOWN_HOSTS"
+          test -n "$BOX_SECRET_KEY"
+          test -n "$BOX_JWT_SECRET"
+          test -n "$BOX_PSTI_API_KEY"
+          test -n "$BOX_SMS_GATEWAY_TOKEN"
+
+          case "$IMAGEM" in
+            *@sha256:*) ;;
+            *)
+              echo "Deploy recusado: imagem sem digest."
+              exit 1
+              ;;
+          esac
+
+      - name: Preparar SSH e variaveis protegidas
+        env:
+          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+          PROD_KNOWN_HOSTS: ${{ secrets.PROD_KNOWN_HOSTS }}
+          BOX_SECRET_KEY: ${{ secrets.BOX_SECRET_KEY }}
+          BOX_JWT_SECRET: ${{ secrets.BOX_JWT_SECRET }}
+          BOX_PSTI_API_KEY: ${{ secrets.BOX_PSTI_API_KEY }}
+          BOX_SMS_GATEWAY_TOKEN: ${{ secrets.BOX_SMS_GATEWAY_TOKEN }}
+        run: |
+          install -d -m 700 "$HOME/.ssh"
+
+          printf '%s\n' "$PROD_SSH_KEY" \
+            > "$HOME/.ssh/deploy_corebox"
+
+          printf '%s\n' "$PROD_KNOWN_HOSTS" \
+            > "$HOME/.ssh/known_hosts"
+
+          chmod 600 \
+            "$HOME/.ssh/deploy_corebox" \
+            "$HOME/.ssh/known_hosts"
+
+          umask 077
+          {
+            printf 'BOX_AMBIENTE=producao\n'
+            printf 'BOX_DATABASE=/app/data/box.db\n'
+            printf 'BOX_UPLOAD_DIR=/app/uploads\n'
+            printf 'BOX_SECRET_KEY=%s\n' "$BOX_SECRET_KEY"
+            printf 'BOX_JWT_SECRET=%s\n' "$BOX_JWT_SECRET"
+            printf 'BOX_PSTI_API_KEY=%s\n' "$BOX_PSTI_API_KEY"
+            printf 'BOX_SMS_GATEWAY_TOKEN=%s\n' "$BOX_SMS_GATEWAY_TOKEN"
+          } > "$RUNNER_TEMP/core-box.env"
+
+      - name: Enviar arquivos para a VPS
+        env:
+          PROD_HOST: ${{ vars.PROD_HOST }}
+        run: |
+          ssh \
+            -i "$HOME/.ssh/deploy_corebox" \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -o StrictHostKeyChecking=yes \
+            -p 22 \
+            "deploy@${PROD_HOST}" \
+            'install -d -m 700 /opt/core-box'
+
+          scp \
+            -i "$HOME/.ssh/deploy_corebox" \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -o StrictHostKeyChecking=yes \
+            -P 22 \
+            deploy/docker-compose.prod.yml \
+            deploy/deploy.sh \
+            "$RUNNER_TEMP/core-box.env" \
+            "deploy@${PROD_HOST}:/opt/core-box/"
+
+          ssh \
+            -i "$HOME/.ssh/deploy_corebox" \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -o StrictHostKeyChecking=yes \
+            -p 22 \
+            "deploy@${PROD_HOST}" \
+            'chmod 750 /opt/core-box/deploy.sh &&
+             chmod 600 /opt/core-box/core-box.env'
+
+      - name: Implantar imagem aprovada
+        id: deploy
+        env:
+          PROD_HOST: ${{ vars.PROD_HOST }}
+          IMAGEM: ${{ needs.docker.outputs.referencia }}
+        run: |
+          ssh \
+            -i "$HOME/.ssh/deploy_corebox" \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -o StrictHostKeyChecking=yes \
+            -p 22 \
+            "deploy@${PROD_HOST}" \
+            "cd /opt/core-box &&
+             IMAGEM='${IMAGEM}' ./deploy.sh"
+
+          echo "imagem=$IMAGEM" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test externo
+        env:
+          PROD_HOST: ${{ vars.PROD_HOST }}
+        run: |
+          for tentativa in {1..15}; do
+            HEALTH="$(
+              curl -s -o health.json -w '%{http_code}' \
+                --max-time 5 \
+                "http://${PROD_HOST}/health" || true
+            )"
+
+            LOGIN="$(
+              curl -s -o login.html -w '%{http_code}' \
+                --max-time 5 \
+                "http://${PROD_HOST}/login" || true
+            )"
+
+            if [ "$HEALTH" = "200" ] &&
+               [ "$LOGIN" = "200" ]; then
+              grep -q \
+                '"status"[[:space:]]*:[[:space:]]*"ok"' \
+                health.json
+
+              echo "Health: HTTP $HEALTH"
+              echo "Login: HTTP $LOGIN"
+              exit 0
+            fi
+
+            echo \
+              "Tentativa $tentativa: health=$HEALTH login=$LOGIN"
+            sleep 4
+          done
+
+          echo "Smoke test de producao falhou."
+          exit 1
+
+      - name: Registrar evidencia
+        env:
+          IMAGEM: ${{ needs.docker.outputs.referencia }}
+          PROD_HOST: ${{ vars.PROD_HOST }}
+        run: |
+          {
+            echo "commit=${GITHUB_SHA}"
+            echo "imagem=${IMAGEM}"
+            echo "destino=deploy@${PROD_HOST}:22"
+            echo "diretorio=/opt/core-box"
+            echo "environment=producao"
+            echo "health=http://${PROD_HOST}/health"
+            echo "login=http://${PROD_HOST}/login"
+            echo "data_utc=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          } > deploy-producao.txt
+
+      - name: Publicar evidencia
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-producao
+          path: deploy-producao.txt
+          if-no-files-found: error
+
+      - name: Limpar material sensivel
+        if: always()
+        run: |
+          rm -f \
+            "$HOME/.ssh/deploy_corebox" \
+            "$RUNNER_TEMP/core-box.env"
+
   resumo:
     name: Resumo da execucao
     if: always()
@@ -428,6 +633,7 @@ jobs:
       - docker
       - trivy_imagem
       - homologacao
+      - producao
     runs-on: ubuntu-latest
 
     steps:
@@ -458,8 +664,9 @@ jobs:
               imagem = os.environ.get("IMAGEM", "")
               if imagem:
                   resumo.write(f"\nImagem analisada: `{imagem}`\n")
+              producao = resultados.get("producao", {})
               resumo.write(
-                  "\n**Etapa 8 pendente:** destino e acesso de producao "
-                  "ainda nao confirmados. Este workflow nao faz deploy.\n"
+                  f"\nEtapa 8 - producao: "
+                  f"**{producao.get('result', 'nao executada')}**\n"
               )
           PY

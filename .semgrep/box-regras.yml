@@ -1,0 +1,72 @@
+rules:
+- id: box.tm03.conta-origem-controlada-pelo-cliente
+  languages:
+  - python
+  severity: ERROR
+  message: 'TM-03: a conta de origem do Pix esta sendo obtida diretamente de dado controlado pelo cliente. Obtenha a conta a partir do usuario autenticado e trate qualquer divergencia como tentativa de acesso nao autorizado.'
+  metadata:
+    threat_model: TM-03
+    cwe:
+    - 'CWE-639: Authorization Bypass Through User-Controlled Key'
+    category: security
+    confidence: HIGH
+    technology:
+    - flask
+    references:
+    - API1:2023 Broken Object Level Authorization
+  patterns:
+  - pattern-either:
+    - pattern: 'conta_origem = $DADOS.get("conta_origem")
+
+        '
+    - pattern: 'conta_origem = $DADOS["conta_origem"]
+
+        '
+    - pattern: '$CONTA = request.form.get("conta_origem", ...)
+
+        '
+    - pattern: '$CONTA = request.json.get("conta_origem", ...)
+
+        '
+- id: box.tm04.limite-override-controlado-pelo-cliente
+  languages:
+  - python
+  severity: ERROR
+  message: 'TM-04: limite_override vindo da requisicao esta sendo usado pela aplicacao. O limite Pix deve ser calculado e imposto no servidor, sem possibilidade de override pelo cliente.'
+  metadata:
+    threat_model: TM-04
+    cwe:
+    - 'CWE-602: Client-Side Enforcement of Server-Side Security'
+    category: security
+    confidence: HIGH
+    technology:
+    - flask
+  pattern-either:
+  - pattern: "if $DADOS.get(\"limite_override\"):\n    ...\n"
+  - pattern: "if $DADOS[\"limite_override\"]:\n    ...\n"
+  - pattern: '$OVERRIDE = $DADOS.get("limite_override", ...)
+
+      '
+  - pattern: '$OVERRIDE = request.form.get("limite_override", ...)
+
+      '
+  - pattern: '$OVERRIDE = request.json.get("limite_override", ...)
+
+      '
+- id: box.tm06.credencial-ou-token-em-log
+  languages:
+  - python
+  severity: ERROR
+  message: 'TM-06: token, cookie de autenticacao ou cabecalho Authorization esta sendo enviado ao log. Registre somente identificadores operacionais nao secretos e dados previamente sanitizados.'
+  metadata:
+    threat_model: TM-06
+    cwe:
+    - 'CWE-532: Insertion of Sensitive Information into Log File'
+    category: security
+    confidence: HIGH
+    technology:
+    - flask
+  pattern-either:
+  - pattern: $LOG.$METHOD(..., request.headers.get("Authorization"), ...)
+  - pattern: $LOG.$METHOD(..., request.headers["Authorization"], ...)
+  - pattern: $LOG.$METHOD(..., request.cookies.get("box_token"), ...)

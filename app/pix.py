@@ -28,9 +28,13 @@ def _limite_vigente(conta, agora=None):
 
 def executar_pix(usuario, dados, idempotency_key=None):
     db = get_db()
-    # TM-06: payload completo (com CPF e token) no log
-    log.info("Pix solicitado por cpf=%s dados=%s auth=%s", usuario["cpf"], dados,
-             request.headers.get("Authorization") or request.cookies.get("box_token"))
+    # TM-06: nao registrar credenciais, tokens ou payload completo.
+    # Manter apenas identificadores operacionais nao secretos.
+    log.info(
+        "Pix solicitado por usuario_id=%s canal=%s",
+        usuario["id"],
+        "api" if request.path.startswith("/api/") else "web",
+    )
 
     # TM-03 (CWE-639 / API1:2023 BOLA): conta de origem vem do cliente
     conta_usuario = conta_do_usuario(usuario["id"])
